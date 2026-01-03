@@ -24,19 +24,26 @@ npm install
    - 「Google」をクリック
    - 「有効にする」をオンに
    - プロジェクトのサポートメールを設定（必要に応じて）
-   - **重要**: 「承認済みのリダイレクト URI」に以下を追加（デプロイ先のURL）：
-     - `https://[プロジェクトID].web.app/__/auth/handler`
-     - `https://[プロジェクトID].firebaseapp.com/__/auth/handler`
-     - 例: `https://anime-watch-helper.web.app/__/auth/handler`
    - 「保存」をクリック
-4. （オプション）匿名認証プロバイダを有効化
+
+4. **Google Cloud Console で OAuth 2.0 設定を確認（重要）**
+   - [Google Cloud Console](https://console.cloud.google.com/) にアクセス
+   - プロジェクト「anime-watch-helper」を選択
+   - 「APIとサービス」>「認証情報」を開く
+   - 「OAuth 2.0 クライアント ID」セクションで、Webアプリケーション用のクライアントIDをクリック
+   - 「承認済みのリダイレクト URI」に以下が含まれているか確認：
+     - `https://anime-watch-helper.web.app/__/auth/handler`
+     - `https://anime-watch-helper.firebaseapp.com/__/auth/handler`
+   - 含まれていない場合は、上記のURIを追加して「保存」をクリック
+
+5. （オプション）匿名認証プロバイダを有効化
    - 「匿名」をクリック
    - 「有効にする」をオンに
    - 「保存」をクリック
    
 **重要**: 
 - Google認証は必須です。有効化しないとログイン時に `auth/operation-not-allowed` エラーが発生します。
-- デプロイ後に「アクセスしようとしているサイトを見つけられません」エラーが出る場合は、上記の承認済みリダイレクトURIが正しく設定されているか確認してください。
+- `redirect_uri_mismatch` エラーが発生する場合は、Google Cloud Console の OAuth 2.0 設定で承認済みリダイレクトURIが正しく設定されているか確認してください。
 
 ### 4. Firestore Database の作成
 
