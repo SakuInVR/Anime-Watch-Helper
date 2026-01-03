@@ -174,7 +174,7 @@ const App = () => {
   const [annictClientSecretInput, setAnnictClientSecretInput] = useState(''); // クライアントシークレット入力
   const [selectedDay, setSelectedDay] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState('active'); // 'timeline', 'active', 'watched', 'ignored'
+  const [viewMode, setViewMode] = useState('active'); // 'timeline', 'chronological', 'active', 'watched', 'ignored'
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEpisodeModalOpen, setIsEpisodeModalOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false); // 感想投稿モーダル
@@ -200,6 +200,8 @@ const App = () => {
   const [isSigningIn, setIsSigningIn] = useState(false); // Googleログイン処理中フラグ
   const notificationTimeoutsRef = React.useRef({}); // 通知タイムアウトの管理
   const dailyNotificationIntervalRef = React.useRef(null); // 日次通知のインターバル
+  const chronologicalTimelineScrollRef = React.useRef(null); // 時系列タイムラインのスクロールコンテナ
+  const currentTimeMarkerRef = React.useRef(null); // 現在時刻マーカーのref
 
   // フォームの状態
   const [formData, setFormData] = useState({ title: '', day: '月曜', time: '00:00', genre: '再放送/カスタム', date: '' });
@@ -594,7 +596,7 @@ const App = () => {
     });
   }, [getWeekStart]);
 
-  // タイムライン用のアニメデータを整理
+  // タイムライン用のアニメデータを整理（曜日ごとに整理、各曜日で時間順にソート）
   const timelineData = useMemo(() => {
     const data = {};
     dayOrder.forEach(day => {
@@ -622,13 +624,13 @@ const App = () => {
       }
     });
 
-    // 各曜日で時間順にソート
+    // 各曜日で時間順にソート（上詰め表示のため）
     dayOrder.forEach(day => {
       data[day].sort((a, b) => a.minutes - b.minutes);
     });
 
     return data;
-  }, [fullDatabase, ignoredIds, watchedIds, searchQuery, currentTime, weekDates, editFilter]);
+  }, [fullDatabase, ignoredIds, watchedIds, searchQuery, currentTime, weekDates, editFilter, dayOrder]);
 
   // タイムライン用の時間帯を生成（アニメが存在する時間帯のみ）
   const timeSlots = useMemo(() => {
@@ -762,6 +764,41 @@ const App = () => {
     return filtered;
   }, [selectedDay, searchQuery, watchedIds, ignoredIds, viewMode, fullDatabase, currentTime, weekDates, editFilter, dayOrder]);
 
+  // 時系列タイムライン用のデータ（現在時刻基準で時系列順にソート）
+  const chronologicalTimelineData = useMemo(() => {
+    const activeAnime = fullDatabase.filter(anime => {
+      // 編集フィルター適用
+      if (editFilter === 'unedited' && anime.isOverridden) return false;
+      if (editFilter === 'edited' && !anime.isOverridden) return false;
+      
+      return !ignoredIds.includes(anime.id) && 
+        (!searchQuery || anime.title.toLowerCase().includes(searchQuery.toLowerCase())) &&
+        hasStarted(anime) && anime.day && anime.time;
+    });
+
+    // 各アニメに放送時刻を計算して追加
+    const animeWithTime = activeAnime.map(anime => {
+      const isWatched = watchedIds.includes(anime.id);
+      const broadcastTime = getAnimeBroadcastTime(anime, isWatched);
+      return {
+        ...anime,
+        broadcastTime,
+        isWatched,
+        timeDiff: broadcastTime ? broadcastTime.getTime() - currentTime.getTime() : null
+      };
+    }).filter(anime => anime.broadcastTime !== null); // 放送時刻が取得できないものは除外
+
+    // 現在時刻を基準にソート（過去→未来）
+    animeWithTime.sort((a, b) => {
+      if (!a.timeDiff && !b.timeDiff) return 0;
+      if (!a.timeDiff) return 1;
+      if (!b.timeDiff) return -1;
+      return a.timeDiff - b.timeDiff;
+    });
+
+    return animeWithTime;
+  }, [fullDatabase, ignoredIds, watchedIds, searchQuery, currentTime, weekDates, editFilter, dayOrder]);
+
   // 進捗計算
   const stats = useMemo(() => {
     const activeDatabase = fullDatabase.filter(a => !ignoredIds.includes(a.id));
@@ -848,6 +885,24 @@ const App = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notificationEnabled, notificationPermission, notificationTime, fullDatabase, watchedIds, ignoredIds, currentTime]);
+
+  // 時系列タイムラインの初期スクロール位置を現在時刻に設定
+  useEffect(() => {
+    if (viewMode === 'chronological' && currentTimeMarkerRef.current && chronologicalTimelineScrollRef.current) {
+      // 少し遅延してスクロール（DOMが完全にレンダリングされた後）
+      const timer = setTimeout(() => {
+        if (currentTimeMarkerRef.current && chronologicalTimelineScrollRef.current) {
+          const container = chronologicalTimelineScrollRef.current;
+          const marker = currentTimeMarkerRef.current;
+          const containerRect = container.getBoundingClientRect();
+          const markerRect = marker.getBoundingClientRect();
+          const scrollTop = container.scrollTop + markerRect.top - containerRect.top - containerRect.height / 2;
+          container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [viewMode]);
 
   const toggleWatch = (id) => {
     const next = watchedIds.includes(id) ? watchedIds.filter(i => i !== id) : [...watchedIds, id];
@@ -2035,6 +2090,16 @@ const App = () => {
                 {viewMode === 'timeline' && <ChevronRight size={14} />}
               </button>
               <button 
+                onClick={() => setViewMode('chronological')}
+                className={`w-full text-left px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-between ${viewMode === 'chronological' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-800 text-neutral-400'}`}
+              >
+                <span className="flex items-center gap-2">
+                  <Clock size={14} />
+                  時系列タイムライン
+                </span>
+                {viewMode === 'chronological' && <ChevronRight size={14} />}
+              </button>
+              <button 
                 onClick={() => setViewMode('active')}
                 className={`w-full text-left px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-between ${viewMode === 'active' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-800 text-neutral-400'}`}
               >
@@ -2149,12 +2214,10 @@ const App = () => {
                   )}
                 </div>
               </div>
-              {currentTimePosition && (
-                <div className="flex items-center gap-2 text-xs text-blue-400">
-                  <Clock size={12} />
-                  現在時刻: {currentTime.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
-                </div>
-              )}
+              <div className="flex items-center gap-2 text-xs text-blue-400">
+                <Clock size={12} />
+                現在時刻: {currentTime.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+              </div>
             </div>
 
             {/* タイムラインターブル */}
@@ -2163,7 +2226,7 @@ const App = () => {
                 {/* 曜日ヘッダー */}
                 <div className="grid grid-cols-8 border-b border-neutral-800 sticky top-0 bg-neutral-900 z-20">
                   <div className="p-3 text-xs font-black text-neutral-500 uppercase border-r border-neutral-800">
-                    時間
+                    曜日
                   </div>
                   {dayOrder.map((day, index) => {
                     const date = weekDates && weekDates[index] ? weekDates[index] : null;
@@ -2188,114 +2251,194 @@ const App = () => {
                   })}
                 </div>
 
-                {/* タイムスロット */}
-                <div className="relative">
-                  {timeSlots && timeSlots.length > 0 ? (
-                    timeSlots.map((slot, slotIndex) => (
-                      <div key={slot.hour} className="grid grid-cols-8 border-b border-neutral-800/50">
-                        {/* 時間ラベル */}
-                        <div className="p-2 text-xs text-neutral-600 font-mono border-r border-neutral-800 bg-neutral-950/50">
-                          {slot.label}
-                        </div>
-
-                        {/* 各曜日のセル */}
-                        {dayOrder.map((day, dayIndex) => {
-                          try {
-                            const slotStart = slot.minutes || 0;
-                            const slotEnd = slotIndex < (timeSlots.length - 1) ? (timeSlots[slotIndex + 1]?.minutes || 26 * 60) : 26 * 60;
-                            const animeInSlot = (timelineData && timelineData[day] ? timelineData[day] : []).filter(anime => {
-                              // この時間スロットに該当するアニメを取得
-                              if (!anime || typeof anime.minutes !== 'number') return false;
-                              return anime.minutes >= slotStart && anime.minutes < slotEnd;
-                            });
-
-                            const isCurrentTimeSlot = currentTimePosition?.dayIndex === dayIndex && 
-                              currentTimePosition?.minutes >= slot.minutes && 
-                              currentTimePosition?.minutes < slotEnd;
-
-                            return (
-                              <div 
-                                key={day}
-                                className={`min-h-[60px] p-1 border-r border-neutral-800/50 last:border-r-0 relative ${
-                                  isCurrentTimeSlot ? 'bg-blue-900/10' : ''
+                {/* 各曜日の列（上詰め表示） */}
+                <div className="grid grid-cols-8">
+                  <div className="p-2 text-xs text-neutral-600 font-mono border-r border-neutral-800 bg-neutral-950/50">
+                    {/* 左側の時間ラベル列は不要 */}
+                  </div>
+                  {dayOrder.map((day, dayIndex) => {
+                    const animeInDay = timelineData[day] || [];
+                    const isToday = currentTimePosition?.dayIndex === dayIndex;
+                    
+                    return (
+                      <div 
+                        key={day}
+                        className={`border-r border-neutral-800/50 last:border-r-0 ${
+                          isToday ? 'bg-blue-900/5' : ''
+                        }`}
+                      >
+                        {animeInDay.length > 0 ? (
+                          <div className="space-y-1 p-1">
+                            {animeInDay.map((anime) => (
+                              <div
+                                key={anime.id}
+                                onClick={() => toggleWatch(anime.id)}
+                                className={`p-2 rounded-lg cursor-pointer transition-all hover:scale-[1.02] text-xs ${
+                                  anime.isWatched
+                                    ? 'bg-blue-600/20 border border-blue-500/30 opacity-60'
+                                    : 'bg-neutral-800 border border-neutral-700 hover:border-blue-500/50'
                                 }`}
                               >
-                                {animeInSlot.map((anime) => (
-                                  <div
-                                    key={anime.id}
-                                    onClick={() => toggleWatch(anime.id)}
-                                    className={`mb-1 p-2 rounded-lg cursor-pointer transition-all hover:scale-[1.02] text-xs ${
-                                      anime.isWatched
-                                        ? 'bg-blue-600/20 border border-blue-500/30 opacity-60'
-                                        : 'bg-neutral-800 border border-neutral-700 hover:border-blue-500/50'
-                                    }`}
-                                  >
-                                    <div className="flex items-start gap-2">
-                                      <div className={`flex-shrink-0 mt-0.5 ${anime.isWatched ? 'text-blue-400' : 'text-neutral-500'}`}>
-                                        {anime.isWatched ? <CheckCircle2 size={12} /> : <div className="w-3 h-3 border border-neutral-600 rounded" />}
-                                      </div>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="font-bold text-[10px] text-white truncate">
-                                          {anime.time}
-                                        </div>
-                                        <div className={`text-[11px] mt-0.5 ${anime.isWatched ? 'line-through text-neutral-500' : 'text-neutral-300'}`}>
-                                          {anime.title}
-                                        </div>
-                                        {/* 話数表示（タイムライン） */}
-                                        {(() => {
-                                          const currentEp = getCurrentEpisode(anime.id);
-                                          const nextEp = getNextEpisode(anime.id);
-                                          if (currentEp > 0) {
-                                            return (
-                                              <div className="mt-0.5">
-                                                <span className="text-[9px] text-blue-400">次: {nextEp}話</span>
-                                              </div>
-                                            );
-                                          }
-                                          return null;
-                                        })()}
-                                      </div>
+                                <div className="flex items-start gap-2">
+                                  <div className={`flex-shrink-0 mt-0.5 ${anime.isWatched ? 'text-blue-400' : 'text-neutral-500'}`}>
+                                    {anime.isWatched ? <CheckCircle2 size={12} /> : <div className="w-3 h-3 border border-neutral-600 rounded" />}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-bold text-[10px] text-white truncate">
+                                      {anime.time}
                                     </div>
+                                    <div className={`text-[11px] mt-0.5 ${anime.isWatched ? 'line-through text-neutral-500' : 'text-neutral-300'}`}>
+                                      {anime.title}
+                                    </div>
+                                    {/* 話数表示（タイムライン） */}
+                                    {(() => {
+                                      const currentEp = getCurrentEpisode(anime.id);
+                                      const nextEp = getNextEpisode(anime.id);
+                                      if (currentEp > 0) {
+                                        return (
+                                          <div className="mt-0.5">
+                                            <span className="text-[9px] text-blue-400">次: {nextEp}話</span>
+                                          </div>
+                                        );
+                                      }
+                                      return null;
+                                    })()}
                                   </div>
-                                ))}
-                                
-                                {/* 現在時刻インジケーター */}
-                                {isCurrentTimeSlot && currentTimePosition && (
-                                  <div 
-                                    className="absolute left-0 right-0 h-0.5 bg-blue-500 z-10"
-                                    style={{
-                                      top: `${Math.max(0, Math.min(100, ((currentTimePosition.minutes - slot.minutes) / 60) * 100))}%`
-                                    }}
-                                  >
-                                    <div className="absolute -left-2 top-1/2 -translate-y-1/2 w-3 h-3 bg-blue-500 rounded-full"></div>
-                                  </div>
-                                )}
+                                </div>
                               </div>
-                            );
-                          } catch (err) {
-                            console.error('Timeline cell error:', err);
-                            return (
-                              <div key={day} className="min-h-[60px] p-1 border-r border-neutral-800/50 last:border-r-0">
-                                {/* Error state */}
-                              </div>
-                            );
-                          }
-                        })}
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-4 text-center text-neutral-600 text-[10px]">
+                            {/* 空のセル */}
+                          </div>
+                        )}
                       </div>
-                    ))
-                  ) : (
-                    <div className="col-span-8 p-8 text-center text-neutral-500">
-                      タイムラインを読み込み中...
-                    </div>
-                  )}
+                    );
+                  })}
                 </div>
               </div>
             </div>
           </div>
         )}
 
+        {/* 時系列タイムライン */}
+        {viewMode === 'chronological' && (
+          <div className="mb-8 bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden">
+            {/* ヘッダー */}
+            <div className="p-4 border-b border-neutral-800 bg-neutral-800/50">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-lg font-black text-white flex items-center gap-2">
+                  <Clock size={18} />
+                  時系列タイムライン
+                </h2>
+                <div className="text-xs text-neutral-400 font-bold">
+                  現在時刻: {currentTime.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+            </div>
+
+            {/* スクロール可能なタイムライン */}
+            <div 
+              ref={chronologicalTimelineScrollRef}
+              className="relative h-[600px] overflow-y-auto"
+            >
+              {chronologicalTimelineData.length > 0 ? (
+                <div className="relative py-8">
+                  {/* 現在時刻マーカー */}
+                  <div 
+                    ref={currentTimeMarkerRef}
+                    className="sticky top-1/2 -translate-y-1/2 z-20 flex items-center gap-3 py-2 mb-4"
+                  >
+                    <div className="flex-shrink-0 w-3 h-3 bg-blue-500 rounded-full"></div>
+                    <div className="flex-1 h-0.5 bg-blue-500"></div>
+                    <div className="flex-shrink-0 px-3 py-1 bg-blue-500 text-white text-xs font-bold rounded-full">
+                      現在時刻
+                    </div>
+                  </div>
+
+                  {/* アニメリスト */}
+                  {chronologicalTimelineData.map((anime, index) => {
+                    const isPast = anime.timeDiff < 0;
+                    const isFuture = anime.timeDiff > 0;
+                    const isCurrent = Math.abs(anime.timeDiff) < 60000; // 1分以内は現在時刻とみなす
+                    
+                    return (
+                      <div
+                        key={`${anime.id}-${anime.broadcastTime?.getTime()}`}
+                        className={`px-6 py-4 border-l-4 ${
+                          isPast ? 'border-neutral-600' : 
+                          isFuture ? 'border-blue-500' : 
+                          'border-blue-400'
+                        } ${isCurrent ? 'bg-blue-500/10' : ''}`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className={`text-xs font-bold ${
+                                isPast ? 'text-neutral-500' : 
+                                isFuture ? 'text-blue-400' : 
+                                'text-blue-300'
+                              }`}>
+                                {anime.broadcastTime?.toLocaleDateString('ja-JP', { 
+                                  month: 'numeric', 
+                                  day: 'numeric',
+                                  weekday: 'short'
+                                })} {anime.time}
+                              </div>
+                              {isPast && (
+                                <span className="text-[10px] text-neutral-600 uppercase font-bold">過去</span>
+                              )}
+                              {isFuture && (
+                                <span className="text-[10px] text-blue-500 uppercase font-bold">未来</span>
+                              )}
+                            </div>
+                            <div 
+                              onClick={() => toggleWatch(anime.id)}
+                              className={`text-base font-bold cursor-pointer transition-all hover:opacity-80 ${
+                                anime.isWatched 
+                                  ? 'line-through text-neutral-500' 
+                                  : 'text-white'
+                              }`}
+                            >
+                              {anime.title}
+                            </div>
+                            {anime.genre && (
+                              <div className="text-xs text-neutral-400 mt-1">{anime.genre}</div>
+                            )}
+                            {/* 話数表示 */}
+                            {(() => {
+                              const currentEp = getCurrentEpisode(anime.id);
+                              const nextEp = getNextEpisode(anime.id);
+                              if (currentEp > 0) {
+                                return (
+                                  <div className="mt-2">
+                                    <span className="text-xs text-blue-400">次: {nextEp}話</span>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </div>
+                          <div className={`flex-shrink-0 ${anime.isWatched ? 'text-blue-400' : 'text-neutral-500'}`}>
+                            {anime.isWatched ? <CheckCircle2 size={20} /> : <div className="w-5 h-5 border-2 border-neutral-600 rounded-full" />}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="p-12 text-center text-neutral-500">
+                  表示するアニメがありません
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* アニメリスト */}
-        {viewMode !== 'timeline' && (
+        {viewMode !== 'timeline' && viewMode !== 'chronological' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {filteredAnime.length === 0 ? (
               <div className="col-span-full">
