@@ -202,6 +202,7 @@ const App = () => {
   const dailyNotificationIntervalRef = React.useRef(null); // 日次通知のインターバル
   const chronologicalTimelineScrollRef = React.useRef(null); // 時系列タイムラインのスクロールコンテナ
   const currentTimeMarkerRef = React.useRef(null); // 現在時刻マーカーのref
+  const currentDayHeaderRef = React.useRef(null); // 現在の曜日のヘッダーのref
 
   // フォームの状態
   const [formData, setFormData] = useState({ title: '', day: '月曜', time: '00:00', genre: '再放送/カスタム', date: '' });
@@ -764,7 +765,7 @@ const App = () => {
     return filtered;
   }, [selectedDay, searchQuery, watchedIds, ignoredIds, viewMode, fullDatabase, currentTime, weekDates, editFilter, dayOrder]);
 
-  // 時系列タイムライン用のデータ（現在時刻基準で時系列順にソート）
+  // 時系列タイムライン用のデータ（曜日ごとにグループ化、現在の曜日を中心に前後3曜日ずつ表示）
   const chronologicalTimelineData = useMemo(() => {
     const activeAnime = fullDatabase.filter(anime => {
       // 編集フィルター適用
@@ -788,16 +789,57 @@ const App = () => {
       };
     }).filter(anime => anime.broadcastTime !== null); // 放送時刻が取得できないものは除外
 
-    // 現在時刻を基準にソート（過去→未来）
-    animeWithTime.sort((a, b) => {
-      if (!a.timeDiff && !b.timeDiff) return 0;
-      if (!a.timeDiff) return 1;
-      if (!b.timeDiff) return -1;
-      return a.timeDiff - b.timeDiff;
+    // 曜日ごとにグループ化
+    const animeByDay = {};
+    animeWithTime.forEach(anime => {
+      if (!animeByDay[anime.day]) {
+        animeByDay[anime.day] = [];
+      }
+      animeByDay[anime.day].push(anime);
     });
 
-    return animeWithTime;
-  }, [fullDatabase, ignoredIds, watchedIds, searchQuery, currentTime, weekDates, editFilter, dayOrder]);
+    // 各曜日で時間順にソート
+    Object.keys(animeByDay).forEach(day => {
+      animeByDay[day].sort((a, b) => {
+        if (!a.broadcastTime || !b.broadcastTime) return 0;
+        return a.broadcastTime.getTime() - b.broadcastTime.getTime();
+      });
+    });
+
+    // 現在の曜日を取得
+    const currentDayIndex = currentTimePosition?.dayIndex ?? null;
+    const currentDay = currentDayIndex !== null ? dayOrder[currentDayIndex] : null;
+
+    // 現在の曜日を中心に、前3曜日と後3曜日の順序で配置
+    const sortedDays = [];
+    if (currentDayIndex !== null) {
+      // 現在の曜日を中心に、前後3曜日ずつ表示する順序を生成
+      for (let offset = -3; offset <= 3; offset++) {
+        let dayIndex = currentDayIndex + offset;
+        // 曜日インデックスを0-6の範囲に調整（週を循環）
+        if (dayIndex < 0) dayIndex += 7;
+        if (dayIndex >= 7) dayIndex -= 7;
+        
+        const day = dayOrder[dayIndex];
+        if (animeByDay[day]) {
+          sortedDays.push({ 
+            day, 
+            anime: animeByDay[day], 
+            isCurrent: offset === 0 
+          });
+        }
+      }
+    } else {
+      // 現在の曜日が取得できない場合は通常の順序
+      dayOrder.forEach(day => {
+        if (animeByDay[day]) {
+          sortedDays.push({ day, anime: animeByDay[day], isCurrent: false });
+        }
+      });
+    }
+
+    return sortedDays;
+  }, [fullDatabase, ignoredIds, watchedIds, searchQuery, currentTime, weekDates, editFilter, dayOrder, currentTimePosition]);
 
   // 進捗計算
   const stats = useMemo(() => {
@@ -886,17 +928,17 @@ const App = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notificationEnabled, notificationPermission, notificationTime, fullDatabase, watchedIds, ignoredIds, currentTime]);
 
-  // 時系列タイムラインの初期スクロール位置を現在時刻に設定
+  // 時系列タイムラインの初期スクロール位置を現在の曜日の先頭に設定
   useEffect(() => {
-    if (viewMode === 'chronological' && currentTimeMarkerRef.current && chronologicalTimelineScrollRef.current) {
+    if (viewMode === 'chronological' && currentDayHeaderRef.current && chronologicalTimelineScrollRef.current) {
       // 少し遅延してスクロール（DOMが完全にレンダリングされた後）
       const timer = setTimeout(() => {
-        if (currentTimeMarkerRef.current && chronologicalTimelineScrollRef.current) {
+        if (currentDayHeaderRef.current && chronologicalTimelineScrollRef.current) {
           const container = chronologicalTimelineScrollRef.current;
-          const marker = currentTimeMarkerRef.current;
+          const header = currentDayHeaderRef.current;
           const containerRect = container.getBoundingClientRect();
-          const markerRect = marker.getBoundingClientRect();
-          const scrollTop = container.scrollTop + markerRect.top - containerRect.top - containerRect.height / 2;
+          const headerRect = header.getBoundingClientRect();
+          const scrollTop = container.scrollTop + headerRect.top - containerRect.top - 20; // 少し上に余白
           container.scrollTo({ top: scrollTop, behavior: 'smooth' });
         }
       }, 100);
@@ -2345,85 +2387,128 @@ const App = () => {
             >
               {chronologicalTimelineData.length > 0 ? (
                 <div className="relative py-8">
-                  {/* 現在時刻マーカー */}
-                  <div 
-                    ref={currentTimeMarkerRef}
-                    className="sticky top-1/2 -translate-y-1/2 z-20 flex items-center gap-3 py-2 mb-4"
-                  >
-                    <div className="flex-shrink-0 w-3 h-3 bg-blue-500 rounded-full"></div>
-                    <div className="flex-1 h-0.5 bg-blue-500"></div>
-                    <div className="flex-shrink-0 px-3 py-1 bg-blue-500 text-white text-xs font-bold rounded-full">
-                      現在時刻
-                    </div>
-                  </div>
-
-                  {/* アニメリスト */}
-                  {chronologicalTimelineData.map((anime, index) => {
-                    const isPast = anime.timeDiff < 0;
-                    const isFuture = anime.timeDiff > 0;
-                    const isCurrent = Math.abs(anime.timeDiff) < 60000; // 1分以内は現在時刻とみなす
+                  {/* 曜日ごとのグループ */}
+                  {chronologicalTimelineData.map((dayGroup, groupIndex) => {
+                    const dayIndex = dayOrder.indexOf(dayGroup.day);
+                    const date = weekDates && weekDates[dayIndex] ? weekDates[dayIndex] : null;
                     
                     return (
-                      <div
-                        key={`${anime.id}-${anime.broadcastTime?.getTime()}`}
-                        className={`px-6 py-4 border-l-4 ${
-                          isPast ? 'border-neutral-600' : 
-                          isFuture ? 'border-blue-500' : 
-                          'border-blue-400'
-                        } ${isCurrent ? 'bg-blue-500/10' : ''}`}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <div className={`text-xs font-bold ${
-                                isPast ? 'text-neutral-500' : 
-                                isFuture ? 'text-blue-400' : 
-                                'text-blue-300'
+                      <div key={dayGroup.day} className="mb-8">
+                        {/* 曜日ヘッダー */}
+                        <div 
+                          ref={dayGroup.isCurrent ? currentDayHeaderRef : null}
+                          className={`sticky top-0 z-10 px-6 py-3 mb-2 ${
+                            dayGroup.isCurrent ? 'bg-blue-900/30 border-l-4 border-blue-500' : 'bg-neutral-800/50 border-l-4 border-neutral-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className={`text-sm font-black uppercase ${
+                              dayGroup.isCurrent ? 'text-blue-400' : 'text-neutral-400'
+                            }`}>
+                              {dayGroup.day}
+                            </div>
+                            {date && (
+                              <div className={`text-xs ${
+                                dayGroup.isCurrent ? 'text-blue-300' : 'text-neutral-500'
                               }`}>
-                                {anime.broadcastTime?.toLocaleDateString('ja-JP', { 
-                                  month: 'numeric', 
-                                  day: 'numeric',
-                                  weekday: 'short'
-                                })} {anime.time}
+                                {date.getMonth() + 1}/{date.getDate()}
                               </div>
-                              {isPast && (
-                                <span className="text-[10px] text-neutral-600 uppercase font-bold">過去</span>
-                              )}
-                              {isFuture && (
-                                <span className="text-[10px] text-blue-500 uppercase font-bold">未来</span>
-                              )}
-                            </div>
-                            <div 
-                              onClick={() => toggleWatch(anime.id)}
-                              className={`text-base font-bold cursor-pointer transition-all hover:opacity-80 ${
-                                anime.isWatched 
-                                  ? 'line-through text-neutral-500' 
-                                  : 'text-white'
-                              }`}
-                            >
-                              {anime.title}
-                            </div>
-                            {anime.genre && (
-                              <div className="text-xs text-neutral-400 mt-1">{anime.genre}</div>
                             )}
-                            {/* 話数表示 */}
-                            {(() => {
-                              const currentEp = getCurrentEpisode(anime.id);
-                              const nextEp = getNextEpisode(anime.id);
-                              if (currentEp > 0) {
-                                return (
-                                  <div className="mt-2">
-                                    <span className="text-xs text-blue-400">次: {nextEp}話</span>
-                                  </div>
-                                );
-                              }
-                              return null;
-                            })()}
-                          </div>
-                          <div className={`flex-shrink-0 ${anime.isWatched ? 'text-blue-400' : 'text-neutral-500'}`}>
-                            {anime.isWatched ? <CheckCircle2 size={20} /> : <div className="w-5 h-5 border-2 border-neutral-600 rounded-full" />}
+                            {dayGroup.isCurrent && (
+                              <span className="text-[10px] text-blue-500 uppercase font-bold px-2 py-0.5 bg-blue-500/20 rounded">
+                                今日
+                              </span>
+                            )}
                           </div>
                         </div>
+
+                        {/* アニメリスト */}
+                        {dayGroup.anime.map((anime, index) => {
+                          const isPast = anime.timeDiff < 0;
+                          const isFuture = anime.timeDiff > 0;
+                          const isCurrent = Math.abs(anime.timeDiff) < 60000; // 1分以内は現在時刻とみなす
+                          
+                          // 現在時刻マーカーを過去と未来の間に挿入（最初の未来のアニメの前）
+                          const shouldShowMarker = dayGroup.isCurrent && index > 0 && 
+                            dayGroup.anime[index - 1].timeDiff < 0 && anime.timeDiff > 0;
+                          
+                          return (
+                            <React.Fragment key={`fragment-${anime.id}-${anime.broadcastTime?.getTime()}`}>
+                              {shouldShowMarker && (
+                                <div 
+                                  ref={currentTimeMarkerRef}
+                                  className="flex items-center gap-3 py-4 mb-2 px-6"
+                                >
+                                  <div className="flex-shrink-0 w-3 h-3 bg-blue-500 rounded-full"></div>
+                                  <div className="flex-1 h-0.5 bg-blue-500"></div>
+                                  <div className="flex-shrink-0 px-3 py-1 bg-blue-500 text-white text-xs font-bold rounded-full">
+                                    現在時刻
+                                  </div>
+                                </div>
+                              )}
+                              <div
+                                className={`px-6 py-4 border-l-4 ${
+                                  isPast ? 'border-neutral-600' : 
+                                  isFuture ? 'border-blue-500' : 
+                                  'border-blue-400'
+                                } ${isCurrent ? 'bg-blue-500/10' : ''}`}
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <div className={`text-xs font-bold ${
+                                        isPast ? 'text-neutral-500' : 
+                                        isFuture ? 'text-blue-400' : 
+                                        'text-blue-300'
+                                      }`}>
+                                        {anime.broadcastTime?.toLocaleDateString('ja-JP', { 
+                                          month: 'numeric', 
+                                          day: 'numeric',
+                                          weekday: 'short'
+                                        })} {anime.time}
+                                      </div>
+                                      {isPast && (
+                                        <span className="text-[10px] text-neutral-600 uppercase font-bold">過去</span>
+                                      )}
+                                      {isFuture && (
+                                        <span className="text-[10px] text-blue-500 uppercase font-bold">未来</span>
+                                      )}
+                                    </div>
+                                    <div 
+                                      onClick={() => toggleWatch(anime.id)}
+                                      className={`text-base font-bold cursor-pointer transition-all hover:opacity-80 ${
+                                        anime.isWatched 
+                                          ? 'line-through text-neutral-500' 
+                                          : 'text-white'
+                                      }`}
+                                    >
+                                      {anime.title}
+                                    </div>
+                                    {anime.genre && (
+                                      <div className="text-xs text-neutral-400 mt-1">{anime.genre}</div>
+                                    )}
+                                    {/* 話数表示 */}
+                                    {(() => {
+                                      const currentEp = getCurrentEpisode(anime.id);
+                                      const nextEp = getNextEpisode(anime.id);
+                                      if (currentEp > 0) {
+                                        return (
+                                          <div className="mt-2">
+                                            <span className="text-xs text-blue-400">次: {nextEp}話</span>
+                                          </div>
+                                        );
+                                      }
+                                      return null;
+                                    })()}
+                                  </div>
+                                  <div className={`flex-shrink-0 ${anime.isWatched ? 'text-blue-400' : 'text-neutral-500'}`}>
+                                    {anime.isWatched ? <CheckCircle2 size={20} /> : <div className="w-5 h-5 border-2 border-neutral-600 rounded-full" />}
+                                  </div>
+                                </div>
+                              </div>
+                            </React.Fragment>
+                          );
+                        })}
                       </div>
                     );
                   })}
