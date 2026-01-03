@@ -197,6 +197,7 @@ const App = () => {
   const [notificationEnabled, setNotificationEnabled] = useState(false); // 通知が有効かどうか
   const [notificationTime, setNotificationTime] = useState('20:00'); // 通知時刻（デフォルト: 20:00）
   const [serviceWorkerRegistration, setServiceWorkerRegistration] = useState(null); // Service Worker登録
+  const [isSigningIn, setIsSigningIn] = useState(false); // Googleログイン処理中フラグ
   const notificationTimeoutsRef = React.useRef({}); // 通知タイムアウトの管理
   const dailyNotificationIntervalRef = React.useRef(null); // 日次通知のインターバル
 
@@ -1799,16 +1800,25 @@ const App = () => {
       return;
     }
     
+    if (isSigningIn) {
+      // 既にログイン処理中の場合は何もしない
+      return;
+    }
+    
+    setIsSigningIn(true);
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
     } catch (error) {
       console.error('Google sign in error:', error);
-      if (error.code === 'auth/popup-closed-by-user') {
-        // ユーザーがポップアップを閉じた場合はエラーを表示しない
+      if (error.code === 'auth/popup-closed-by-user' || 
+          error.code === 'auth/cancelled-popup-request') {
+        // ユーザーがポップアップを閉じた場合、または既にポップアップが開いている場合はエラーを表示しない
         return;
       }
       alert(`ログインに失敗しました: ${error.message}`);
+    } finally {
+      setIsSigningIn(false);
     }
   };
 
@@ -1853,15 +1863,25 @@ const App = () => {
           </div>
           <button
             onClick={handleGoogleSignIn}
-            className="w-full bg-white hover:bg-neutral-100 text-neutral-900 font-bold py-4 px-6 rounded-xl transition-all shadow-lg flex items-center justify-center gap-3"
+            disabled={isSigningIn}
+            className="w-full bg-white hover:bg-neutral-100 disabled:bg-neutral-300 disabled:cursor-not-allowed text-neutral-900 font-bold py-4 px-6 rounded-xl transition-all shadow-lg flex items-center justify-center gap-3"
           >
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-            </svg>
-            Googleでログイン
+            {isSigningIn ? (
+              <>
+                <Loader2 size={20} className="animate-spin" />
+                ログイン中...
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Googleでログイン
+              </>
+            )}
           </button>
           <p className="text-xs text-neutral-500 mt-6">
             ログイン後、設定からAnnictと連携できます
