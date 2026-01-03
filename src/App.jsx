@@ -467,13 +467,48 @@ const App = () => {
     }
   }, []);
 
-  // 現在時刻の更新
+  // 現在時刻の更新と視聴済みアニメの復活時の話数自動更新
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
     }, 60000); // 1分ごとに更新
     return () => clearInterval(timer);
   }, []);
+
+  // 視聴済みアニメが復活する際に話数を自動更新
+  useEffect(() => {
+    if (!user || loading || !weekDates || weekDates.length === 0) return;
+
+    const updatedProgress = { ...episodeProgress };
+    let hasUpdates = false;
+
+    // 視聴済みアニメをチェック
+    watchedIds.forEach(animeId => {
+      const anime = fullDatabase.find(a => a.id === animeId);
+      if (!anime) return;
+
+      // 話数が登録されている場合のみ処理
+      const currentEpisode = episodeProgress[animeId];
+      if (!currentEpisode || currentEpisode <= 0) return;
+
+      // 次の放送時刻が来たかチェック
+      const nextBroadcastTime = getAnimeBroadcastTime(anime, true);
+      if (nextBroadcastTime && nextBroadcastTime <= currentTime) {
+        // 話数を+1（既に更新されていない場合のみ）
+        if (updatedProgress[animeId] === currentEpisode) {
+          updatedProgress[animeId] = currentEpisode + 1;
+          hasUpdates = true;
+        }
+      }
+    });
+
+    // 更新がある場合のみ保存
+    if (hasUpdates) {
+      setEpisodeProgress(updatedProgress);
+      saveState({ episodeProgress: updatedProgress });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTime, watchedIds, user, loading]);
 
   // メニュー外クリックで閉じる
   useEffect(() => {
@@ -984,6 +1019,15 @@ const App = () => {
     e.stopPropagation();
     const current = episodeProgress[id] || 0;
     updateEpisode(id, (current + 1).toString());
+  };
+
+  // 最終話としてマーク（視聴済みにする）
+  const markAsFinalEpisode = (id, e) => {
+    e.stopPropagation();
+    // 視聴済みとしてマーク
+    const next = watchedIds.includes(id) ? watchedIds : [...watchedIds, id];
+    setWatchedIds(next);
+    saveState({ watchedIds: next });
   };
 
   // 現在の話数を取得（表示用）
@@ -2447,14 +2491,14 @@ const App = () => {
                                 </div>
                               )}
                               <div
-                                className={`px-6 py-4 border-l-4 ${
+                                className={`group relative px-6 py-4 border-l-4 ${
                                   isPast ? 'border-neutral-600' : 
                                   isFuture ? 'border-blue-500' : 
                                   'border-blue-400'
-                                } ${isCurrent ? 'bg-blue-500/10' : ''}`}
+                                } ${isCurrent ? 'bg-blue-500/10' : ''} hover:bg-neutral-800/30 transition-colors`}
                               >
                                 <div className="flex items-start justify-between gap-4">
-                                  <div className="flex-1 min-w-0">
+                                  <div className="flex-1 min-w-0" onClick={() => toggleWatch(anime.id)}>
                                     <div className="flex items-center gap-2 mb-1">
                                       <div className={`text-xs font-bold ${
                                         isPast ? 'text-neutral-500' : 
@@ -2475,7 +2519,6 @@ const App = () => {
                                       )}
                                     </div>
                                     <div 
-                                      onClick={() => toggleWatch(anime.id)}
                                       className={`text-base font-bold cursor-pointer transition-all hover:opacity-80 ${
                                         anime.isWatched 
                                           ? 'line-through text-neutral-500' 
@@ -2493,16 +2536,97 @@ const App = () => {
                                       const nextEp = getNextEpisode(anime.id);
                                       if (currentEp > 0) {
                                         return (
-                                          <div className="mt-2">
-                                            <span className="text-xs text-blue-400">次: {nextEp}話</span>
+                                          <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                            <span className="text-xs text-neutral-400">現在: {currentEp}話</span>
+                                            <span className="text-xs text-blue-400 font-bold">次: {nextEp}話</span>
+                                            <a
+                                              href={getAnnictUrl(anime, nextEp)}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={(e) => e.stopPropagation()}
+                                              className="text-[10px] text-purple-400 hover:text-purple-300 underline flex items-center gap-0.5"
+                                              title={`Annictで${nextEp}話の感想を投稿`}
+                                            >
+                                              Annict
+                                              <ExternalLink size={10} />
+                                            </a>
+                                          </div>
+                                        );
+                                      } else {
+                                        return (
+                                          <div className="mt-2 flex items-center gap-2">
+                                            <span className="text-xs text-neutral-500">次: 1話から</span>
+                                            <a
+                                              href={getAnnictUrl(anime)}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={(e) => e.stopPropagation()}
+                                              className="text-[10px] text-purple-400 hover:text-purple-300 underline flex items-center gap-0.5"
+                                              title="Annictで作品を検索"
+                                            >
+                                              Annict
+                                              <ExternalLink size={10} />
+                                            </a>
                                           </div>
                                         );
                                       }
-                                      return null;
                                     })()}
                                   </div>
-                                  <div className={`flex-shrink-0 ${anime.isWatched ? 'text-blue-400' : 'text-neutral-500'}`}>
-                                    {anime.isWatched ? <CheckCircle2 size={20} /> : <div className="w-5 h-5 border-2 border-neutral-600 rounded-full" />}
+                                  <div className="flex items-center gap-2">
+                                    <div className={`flex-shrink-0 ${anime.isWatched ? 'text-blue-400' : 'text-neutral-500'}`}>
+                                      {anime.isWatched ? <CheckCircle2 size={20} /> : <div className="w-5 h-5 border-2 border-neutral-600 rounded-full" />}
+                                    </div>
+                                    {/* ホバー時に表示されるボタン群 */}
+                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      {/* Annict連携ボタン（話数が設定されている場合のみ表示） */}
+                                      {getCurrentEpisode(anime.id) > 0 && annictAccessToken && (
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); openReviewModal(anime, e); }}
+                                          className="p-2 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 rounded-lg transition-all"
+                                          title={`アプリ内で${getNextEpisode(anime.id)}話の感想を投稿`}
+                                        >
+                                          <MessageSquare size={16} />
+                                        </button>
+                                      )}
+                                      {getCurrentEpisode(anime.id) > 0 && (
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); openAnnictEpisode(anime, e); }}
+                                          className="p-2 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 rounded-lg transition-all"
+                                          title={`Annictで${getNextEpisode(anime.id)}話の感想を投稿`}
+                                        >
+                                          <ExternalLink size={16} />
+                                        </button>
+                                      )}
+                                      {/* 話数更新ボタン */}
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); incrementEpisode(anime.id, e); }}
+                                        className="p-2 text-green-400 hover:text-green-300 hover:bg-green-500/10 rounded-lg transition-all"
+                                        title={`次の話（${getNextEpisode(anime.id)}話）に進む`}
+                                      >
+                                        <SkipForward size={16} />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); openEpisodeModal(anime); }}
+                                        className="p-2 text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 rounded-lg transition-all"
+                                        title="話数を手動で入力"
+                                      >
+                                        <Play size={16} />
+                                      </button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); markAsFinalEpisode(anime.id, e); }}
+                                        className="p-2 text-orange-400 hover:text-orange-300 hover:bg-orange-500/10 rounded-lg transition-all"
+                                        title="最終話としてマーク（視聴済みにする）"
+                                      >
+                                        <CheckCircle size={16} />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); openEditModal(anime); }}
+                                        className="p-2 text-neutral-600 hover:text-white transition-colors"
+                                        title="情報を編集"
+                                      >
+                                        <Edit2 size={16} />
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -2673,6 +2797,13 @@ const App = () => {
                   >
                     <Play size={16} />
                   </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); markAsFinalEpisode(anime.id, e); }}
+                    className="p-2 text-orange-400 hover:text-orange-300 hover:bg-orange-500/10 rounded-lg transition-all"
+                    title="最終話としてマーク（視聴済みにする）"
+                  >
+                    <CheckCircle size={16} />
+                  </button>
                   <button 
                     onClick={(e) => { e.stopPropagation(); openEditModal(anime); }}
                     className="p-2 text-neutral-600 hover:text-white transition-colors"
@@ -2768,6 +2899,19 @@ const App = () => {
                       className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-black py-3 rounded-xl transition-all shadow-xl shadow-blue-600/20"
                     >
                       保存
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        markAsFinalEpisode(editingEpisodeId, e);
+                        setIsEpisodeModalOpen(false);
+                        setEditingEpisodeId(null);
+                        setEpisodeInput('');
+                      }}
+                      className="px-4 py-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold rounded-xl transition-all border border-neutral-700"
+                      title="最終話としてマーク（視聴済みにする）"
+                    >
+                      最終話
                     </button>
                   </div>
                 </div>
