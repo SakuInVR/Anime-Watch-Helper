@@ -12,7 +12,7 @@
     ],
     "rewrites": [
       {
-        "source": "!/__/**",
+        "source": "**",
         "destination": "/index.html"
       }
     ]
