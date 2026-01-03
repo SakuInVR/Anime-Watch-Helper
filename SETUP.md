@@ -24,13 +24,19 @@ npm install
    - 「Google」をクリック
    - 「有効にする」をオンに
    - プロジェクトのサポートメールを設定（必要に応じて）
+   - **重要**: 「承認済みのリダイレクト URI」に以下を追加（デプロイ先のURL）：
+     - `https://[プロジェクトID].web.app/__/auth/handler`
+     - `https://[プロジェクトID].firebaseapp.com/__/auth/handler`
+     - 例: `https://anime-watch-helper.web.app/__/auth/handler`
    - 「保存」をクリック
 4. （オプション）匿名認証プロバイダを有効化
    - 「匿名」をクリック
    - 「有効にする」をオンに
    - 「保存」をクリック
    
-**重要**: Google認証は必須です。有効化しないとログイン時に `auth/operation-not-allowed` エラーが発生します。
+**重要**: 
+- Google認証は必須です。有効化しないとログイン時に `auth/operation-not-allowed` エラーが発生します。
+- デプロイ後に「アクセスしようとしているサイトを見つけられません」エラーが出る場合は、上記の承認済みリダイレクトURIが正しく設定されているか確認してください。
 
 ### 4. Firestore Database の作成
 
