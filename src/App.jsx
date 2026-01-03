@@ -564,8 +564,19 @@ const App = () => {
 
   // 合体データベース & オーバーライド適用（先に定義する必要がある）
   const fullDatabase = useMemo(() => {
+    // カスタムアニメのタイトルセットを作成（重複チェック用）
+    const customTitles = new Set(customAnime.map(a => a.title.trim()));
+    
     // プリセットが有効な場合のみANIME_DATABASEを含める
-    const baseDatabase = enablePreset ? (ANIME_DATABASE || []) : [];
+    // ただし、カスタムアニメとタイトルが重複するプリセットアニメは除外
+    let baseDatabase = [];
+    if (enablePreset && ANIME_DATABASE) {
+      baseDatabase = ANIME_DATABASE.filter(presetAnime => {
+        // カスタムアニメとタイトルが重複する場合は除外
+        return !customTitles.has(presetAnime.title.trim());
+      });
+    }
+    
     const combined = [...baseDatabase, ...customAnime];
     return combined.map(anime => {
       if (overrides[anime.id]) {
@@ -1073,7 +1084,6 @@ const App = () => {
   const searchOnNicovideo = async () => {
     const title = formData.title.trim();
     if (!title) {
-      alert('まず作品タイトルを入力してください。');
       return;
     }
     
@@ -1083,16 +1093,11 @@ const App = () => {
       // ニコニコ動画の2026冬アニメページを開く
       const searchUrl = `https://anime.nicovideo.jp/period/2026-winter.html?from=nanime_side`;
       window.open(searchUrl, '_blank', 'noopener,noreferrer');
-      // ユーザーに案内を表示
-      setTimeout(() => {
-        alert(`タイトル「${title}」をクリップボードにコピーしました。\n\nニコニコ動画のページで:\n1. Ctrl+F（またはCmd+F）で検索ボックスを開く\n2. Ctrl+V（またはCmd+V）でタイトルを貼り付け\n3. Enterで検索`);
-      }, 100);
     } catch (err) {
       // クリップボードAPIが使えない場合（HTTP環境など）は、URLを開くだけ
       console.warn('クリップボードへのコピーに失敗しました:', err);
       const searchUrl = `https://anime.nicovideo.jp/period/2026-winter.html?from=nanime_side`;
       window.open(searchUrl, '_blank', 'noopener,noreferrer');
-      alert(`ニコニコ動画のページを開きました。\n\n手動でタイトル「${title}」をコピーして、Ctrl+Fで検索してください。`);
     }
   };
 
@@ -1713,10 +1718,6 @@ const App = () => {
         return;
       }
       
-      const successMessage = continuedCount > 0
-        ? `${newAnimeList.length}件の作品をリストに追加しました！\n（うち${continuedCount}件は継続作品です）`
-        : `${newAnimeList.length}件の作品をリストに追加しました！`;
-      
       // customAnimeに追加
       const updatedCustomAnime = [...customAnime, ...newAnimeList];
       setCustomAnime(updatedCustomAnime);
@@ -1731,7 +1732,23 @@ const App = () => {
         annictData: updatedAnnictData
       });
       
-      alert(`${newAnimeList.length}件の作品をリストに追加しました！`);
+      // 成功メッセージを作成
+      let successMessage = `Annictで「見てる」「見たい」に登録した作品から、${newAnimeList.length}件をリストに追加しました！`;
+      if (continuedCount > 0) {
+        successMessage += `\n（うち${continuedCount}件は継続作品です）`;
+      }
+      if (newAnimeList.length > 0 && newAnimeList.length <= 5) {
+        // 5件以下の場合はタイトルを表示
+        const titles = newAnimeList.map(a => a.title).join('、');
+        successMessage += `\n\n追加された作品：\n${titles}`;
+      } else if (newAnimeList.length > 5) {
+        // 5件を超える場合は最初の5件と「他○件」を表示
+        const titles = newAnimeList.slice(0, 5).map(a => a.title).join('、');
+        const moreCount = newAnimeList.length - 5;
+        successMessage += `\n\n追加された作品：\n${titles}\n他${moreCount}件`;
+      }
+      
+      alert(successMessage);
     } catch (error) {
       console.error('Failed to fetch registered anime from Annict:', error);
       alert(`Annictから作品情報を取得できませんでした: ${error.message}`);
@@ -1806,6 +1823,9 @@ const App = () => {
             <h1 className="text-3xl md:text-4xl font-black bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
               2026 Winter Anime Hub
             </h1>
+            <p className="text-sm text-neutral-400 mt-1">
+              dアニメストアニコニコ支店で見てる人向けサービス
+            </p>
             <div className="flex items-center gap-3 mt-2 text-neutral-500">
               <span className="flex items-center gap-1 text-[10px] font-black uppercase bg-neutral-900 px-2 py-1 rounded border border-neutral-800">
                 {annictAccessToken ? (
