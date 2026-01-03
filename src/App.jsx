@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, deleteField, collection, query, where, getDocs } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, deleteField, collection, query, where, getDocs } from 'firebase/firestore';
 import { 
   CheckCircle2, 
   RefreshCw, 
@@ -203,30 +203,16 @@ const App = () => {
   // フォームの状態
   const [formData, setFormData] = useState({ title: '', day: '月曜', time: '00:00', genre: '再放送/カスタム', date: '' });
 
-  // (1) Auth Initialize
+  // (1) Auth Initialize - 認証状態の監視のみ（自動ログインなし）
   useEffect(() => {
     if (!auth) {
       setLoading(false);
       return;
     }
     
-    const initAuth = async () => {
-      try {
-        const initialToken = import.meta.env.VITE_INITIAL_AUTH_TOKEN;
-        if (initialToken) {
-          await signInWithCustomToken(auth, initialToken);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Auth error:", err);
-        setLoading(false);
-      }
-    };
-    initAuth();
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      if (!u) setLoading(false);
+      setLoading(false);
     });
     return () => unsubscribe();
   }, []);
@@ -287,28 +273,6 @@ const App = () => {
     return () => unsubscribe();
   }, [user]);
 
-  // (3) Save state to Firestore
-  const saveState = async (updates) => {
-    if (!user || !db) {
-      throw new Error('ユーザーまたはデータベースが初期化されていません');
-    }
-    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'userState', 'current');
-    try {
-      await setDoc(userDocRef, {
-        ...updates,
-        updatedAt: Date.now()
-      }, { merge: true });
-      
-      // AnnictトークンとユーザーIDが更新された場合、グローバルコレクションにも保存（別ブラウザ間で共有）
-      if (updates.annictAccessToken !== undefined && updates.annictUserId) {
-        await saveAnnictTokenToGlobal(updates.annictUserId, updates.annictAccessToken);
-      }
-    } catch (err) {
-      console.error("Save error:", err);
-      throw err; // エラーを再スローして、呼び出し元で処理できるようにする
-    }
-  };
-
   // Annictトークンをグローバルコレクションに保存（別ブラウザ間で共有）
   const saveAnnictTokenToGlobal = async (annictUserId, token) => {
     if (!db || !annictUserId) return;
@@ -339,6 +303,29 @@ const App = () => {
       return null;
     }
   };
+
+  // (3) Save state to Firestore
+  const saveState = async (updates) => {
+    if (!user || !db) {
+      throw new Error('ユーザーまたはデータベースが初期化されていません');
+    }
+    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'userState', 'current');
+    try {
+      await setDoc(userDocRef, {
+        ...updates,
+        updatedAt: Date.now()
+      }, { merge: true });
+      
+      // AnnictトークンとユーザーIDが更新された場合、グローバルコレクションにも保存（別ブラウザ間で共有）
+      if (updates.annictAccessToken !== undefined && updates.annictUserId) {
+        await saveAnnictTokenToGlobal(updates.annictUserId, updates.annictAccessToken);
+      }
+    } catch (err) {
+      console.error("Save error:", err);
+      throw err; // エラーを再スローして、呼び出し元で処理できるようにする
+    }
+  };
+
 
   const days = ['All', '月曜', '火曜', '水曜', '木曜', '金曜', '土曜', '日曜'];
   const dayOrder = ['月曜', '火曜', '水曜', '木曜', '金曜', '土曜', '日曜'];
@@ -1805,13 +1792,84 @@ const App = () => {
     }
   };
 
-  // Annictログアウト処理
-  const handleLogout = () => {
+  // Googleログイン処理
+  const handleGoogleSignIn = async () => {
+    if (!auth) {
+      alert('認証サービスが利用できません');
+      return;
+    }
+    
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error('Google sign in error:', error);
+      if (error.code === 'auth/popup-closed-by-user') {
+        // ユーザーがポップアップを閉じた場合はエラーを表示しない
+        return;
+      }
+      alert(`ログインに失敗しました: ${error.message}`);
+    }
+  };
+
+  // Firebaseログアウト処理（Googleログアウト）
+  const handleGoogleLogout = async () => {
+    if (!auth) return;
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Logout error:', error);
+      alert(`ログアウトに失敗しました: ${error.message}`);
+    }
+  };
+
+  // Annictログアウト処理（Annict連携のみ解除）
+  const handleAnnictLogout = () => {
     setAnnictAccessToken(null);
     setAnnictUserInfo(null);
     setAnnictUserId(null);
     saveState({ annictAccessToken: null, annictUserId: null });
   };
+
+  // ログインしていない場合のログイン画面
+  if (!loading && !user) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-neutral-100 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-neutral-900 border border-neutral-800 rounded-3xl p-8 text-center">
+          <div className="mb-6">
+            <h1 className="text-3xl md:text-4xl font-black bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent mb-2">
+              2026 Winter Anime Hub
+            </h1>
+            <p className="text-sm text-neutral-400">
+              dアニメストアニコニコ支店で見てる人向けサービス
+            </p>
+          </div>
+          <div className="bg-blue-600/20 p-6 rounded-2xl mb-6">
+            <Sparkles className="text-blue-400 mx-auto mb-4" size={48} />
+            <h2 className="text-xl font-black text-white mb-2">ログインしてください</h2>
+            <p className="text-sm text-neutral-400">
+              Googleアカウントでログインして、アニメ視聴管理を始めましょう
+            </p>
+          </div>
+          <button
+            onClick={handleGoogleSignIn}
+            className="w-full bg-white hover:bg-neutral-100 text-neutral-900 font-bold py-4 px-6 rounded-xl transition-all shadow-lg flex items-center justify-center gap-3"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            Googleでログイン
+          </button>
+          <p className="text-xs text-neutral-500 mt-6">
+            ログイン後、設定からAnnictと連携できます
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 p-4 md:p-8 font-sans">
@@ -1828,16 +1886,10 @@ const App = () => {
             </p>
             <div className="flex items-center gap-3 mt-2 text-neutral-500">
               <span className="flex items-center gap-1 text-[10px] font-black uppercase bg-neutral-900 px-2 py-1 rounded border border-neutral-800">
-                {annictAccessToken ? (
-                  <>
-                    <User size={12} />
-                    {annictUserInfo ? annictUserInfo : 'Annict連携済み'}
-                  </>
-                ) : (
-                  <>
-                    <User size={12} />
-                    匿名ユーザー
-                  </>
+                <User size={12} />
+                {user?.displayName || user?.email || 'ユーザー'}
+                {annictAccessToken && (
+                  <span className="text-purple-400 ml-1">• Annict連携済み</span>
                 )}
               </span>
               <p className="text-[10px] flex items-center gap-1 font-bold uppercase tracking-wider">
@@ -1847,74 +1899,61 @@ const App = () => {
           </div>
           
           <div className="flex gap-2 w-full md:w-auto">
-            {annictAccessToken ? (
-              <>
-                <div className="relative annict-fetch-menu-container">
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsAnnictFetchMenuOpen(!isAnnictFetchMenuOpen);
-                    }}
-                    disabled={fetchingAnime}
-                    className="flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl transition-all shadow-lg font-bold text-xs uppercase"
-                    title="Annictからアニメを取得"
-                  >
-                    {fetchingAnime ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />
-                        取得中...
-                      </>
-                    ) : (
-                      <>
-                        <Download size={16} />
-                        Annictから取得
-                        <ChevronDown size={14} />
-                      </>
-                    )}
-                  </button>
-                  
-                  {!fetchingAnime && isAnnictFetchMenuOpen && (
-                    <div 
-                      className="absolute top-full left-0 mt-2 bg-neutral-900 border border-neutral-800 rounded-xl shadow-2xl overflow-hidden z-50 min-w-[200px]"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        onClick={() => {
-                          fetchRegisteredAnime();
-                          setIsAnnictFetchMenuOpen(false);
-                        }}
-                        className="w-full text-left px-4 py-3 hover:bg-neutral-800 transition-colors flex items-center gap-2 text-sm"
-                      >
-                        <Download size={16} />
-                        <div>
-                          <div className="font-bold text-white">登録アニメを取得</div>
-                          <div className="text-xs text-neutral-400">今季アニメ・継続作品を取得</div>
-                        </div>
-                      </button>
-                    </div>
+            {annictAccessToken && (
+              <div className="relative annict-fetch-menu-container">
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsAnnictFetchMenuOpen(!isAnnictFetchMenuOpen);
+                  }}
+                  disabled={fetchingAnime}
+                  className="flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl transition-all shadow-lg font-bold text-xs uppercase"
+                  title="Annictからアニメを取得"
+                >
+                  {fetchingAnime ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      取得中...
+                    </>
+                  ) : (
+                    <>
+                      <Download size={16} />
+                      Annictから取得
+                      <ChevronDown size={14} />
+                    </>
                   )}
-                </div>
-                <button 
-                  onClick={handleLogout}
-                  className="flex items-center justify-center gap-2 bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2 rounded-xl transition-all border border-neutral-700 font-bold text-xs uppercase"
-                  title="Annictログアウト"
-                >
-                  <LogOut size={16} />
-                  ログアウト
                 </button>
-              </>
-            ) : (
-              <div className="relative">
-                <button 
-                  onClick={() => setIsAnnictTokenModalOpen(true)}
-                  className="flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-xl transition-all shadow-lg font-bold text-xs uppercase"
-                  title="Annictでログイン"
-                >
-                  <LogIn size={16} />
-                  Annictでログイン
-                </button>
+                
+                {!fetchingAnime && isAnnictFetchMenuOpen && (
+                  <div 
+                    className="absolute top-full left-0 mt-2 bg-neutral-900 border border-neutral-800 rounded-xl shadow-2xl overflow-hidden z-50 min-w-[200px]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => {
+                        fetchRegisteredAnime();
+                        setIsAnnictFetchMenuOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-3 hover:bg-neutral-800 transition-colors flex items-center gap-2 text-sm"
+                    >
+                      <Download size={16} />
+                      <div>
+                        <div className="font-bold text-white">登録アニメを取得</div>
+                        <div className="text-xs text-neutral-400">今季アニメ・継続作品を取得</div>
+                      </div>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
+            <button 
+              onClick={handleGoogleLogout}
+              className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-xl transition-all font-bold text-xs uppercase"
+              title="Googleログアウト"
+            >
+              <LogOut size={16} />
+              ログアウト
+            </button>
             <button 
               onClick={() => setIsModalOpen(true)}
               className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-2xl transition-all shadow-lg active:scale-95 font-bold text-xs uppercase tracking-widest"
@@ -2604,39 +2643,56 @@ const App = () => {
               </div>
               <div className="p-8 space-y-6">
                 <div className="text-center mb-6">
-                  <div className="bg-purple-600/20 p-6 rounded-2xl inline-block mb-4">
-                    <Sparkles className="text-purple-400" size={64} />
+                  <div className="bg-blue-600/20 p-6 rounded-2xl inline-block mb-4">
+                    <Sparkles className="text-blue-400" size={64} />
                   </div>
-                  <h3 className="text-2xl font-black text-white mb-2">Annictと連携してリストを作成</h3>
+                  <h3 className="text-2xl font-black text-white mb-2">アニメ視聴管理を始めましょう</h3>
                   <p className="text-neutral-400">
-                    自分の視聴環境に合わせて、Annictから放送予定を自動取得できます
+                    作品を手動で追加するか、Annictと連携して自動的にリストを作成できます
                   </p>
                 </div>
 
                 <div className="space-y-4">
                   <div className="flex items-start gap-4 p-4 bg-neutral-800/50 rounded-xl">
                     <div className="bg-blue-600/20 p-2 rounded-lg flex-shrink-0">
-                      <Radio className="text-blue-400" size={20} />
+                      <Plus className="text-blue-400" size={20} />
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-bold text-white mb-1">1. Annictアカウントと連携</h4>
+                      <h4 className="font-bold text-white mb-1">1. 作品を追加する</h4>
                       <p className="text-sm text-neutral-400 mb-3">
-                        Annictのアカウントと連携することで、あなたの視聴予定を自動的に取得できます
+                        「作品追加」ボタンから手動で作品を追加できます
+                      </p>
+                      <button
+                        onClick={() => {
+                          setIsModalOpen(true);
+                          completeTutorial();
+                        }}
+                        className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2 rounded-lg transition-all text-sm"
+                      >
+                        作品を追加
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-4 p-4 bg-neutral-800/50 rounded-xl">
+                    <div className="bg-purple-600/20 p-2 rounded-lg flex-shrink-0">
+                      <Radio className="text-purple-400" size={20} />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-bold text-white mb-1">2. （オプション）Annictアカウントと連携</h4>
+                      <p className="text-sm text-neutral-400 mb-3">
+                        Annictと連携すると、視聴予定を自動的に取得できます（任意の機能です）
                       </p>
                       {!annictAccessToken ? (
-                        <div className="space-y-2">
-                          <button
-                            onClick={startAnnictAuth}
-                            className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold px-6 py-2 rounded-lg transition-all text-sm"
-                          >
-                            Annictで認証する
-                          </button>
-                          {!hasAnnictClientId && (
-                            <p className="text-xs text-neutral-500 text-center">
-                              初回はクライアントIDの設定が必要です
-                            </p>
-                          )}
-                        </div>
+                        <button
+                          onClick={() => {
+                            setIsTutorialOpen(false);
+                            setIsAnnictTokenModalOpen(true);
+                          }}
+                          className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold px-6 py-2 rounded-lg transition-all text-sm"
+                        >
+                          Annictでログイン
+                        </button>
                       ) : (
                         <div className="flex items-center gap-2 text-green-400 text-sm">
                           <CheckCircle size={16} />
@@ -2651,7 +2707,7 @@ const App = () => {
                       <Download className="text-indigo-400" size={20} />
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-bold text-white mb-1">2. Annictから登録アニメを取得</h4>
+                      <h4 className="font-bold text-white mb-1">3. （オプション）Annictから登録アニメを取得</h4>
                       <p className="text-sm text-neutral-400 mb-3">
                         Annictで「見てる」または「見たい」ステータスを設定した作品の放送予定を自動的にリストに追加します（今季アニメ・継続作品を含む）
                       </p>
@@ -2686,25 +2742,12 @@ const App = () => {
                 </div>
 
                 <div className="pt-4 border-t border-neutral-800">
-                  <p className="text-xs text-neutral-500 mb-4 text-center">
-                    または、「作品追加」ボタンから手動で作品を追加することもできます
-                  </p>
                   <div className="flex gap-3">
                     <button
                       onClick={completeTutorial}
                       className="flex-1 bg-neutral-800 hover:bg-neutral-700 text-white font-bold py-3 rounded-xl transition-all"
                     >
-                      後で設定する
-                    </button>
-                    <button
-                      onClick={() => {
-                        setIsModalOpen(true);
-                        completeTutorial();
-                      }}
-                      className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-black py-3 rounded-xl transition-all shadow-xl shadow-blue-600/20 flex items-center justify-center gap-2"
-                    >
-                      作品を追加
-                      <ArrowRight size={18} />
+                      閉じる
                     </button>
                   </div>
                 </div>
@@ -2731,7 +2774,7 @@ const App = () => {
               <div className="p-6 space-y-4">
                 <div>
                   <p className="text-sm text-neutral-400 mb-4">
-                    Annictの個人用アクセストークンを入力してログインします。
+                    個人用アクセストークンでAnnictにログインできます。
                   </p>
                   <a 
                     href="https://annict.com/settings/apps" 
@@ -2827,9 +2870,9 @@ const App = () => {
                     <p className="font-bold text-neutral-200 mb-2">手順：</p>
                     <ol className="list-decimal list-inside space-y-1.5">
                       <li>「新しいアプリケーションを作成」をクリック</li>
-                      <li>アプリケーション名を入力（任意）</li>
-                      <li>リダイレクトURIに <code className="bg-neutral-950 px-1.5 py-0.5 rounded text-purple-400 font-mono">{window.location.origin}</code> を入力</li>
-                      <li>作成後、表示される「クライアントID」をコピーして下の入力欄に貼り付け</li>
+                      <li>アプリケーション名を入力（任意、例：「AnimeWatchHelper」）</li>
+                      <li>リダイレクトURIに <code className="bg-neutral-950 px-1.5 py-0.5 rounded text-purple-400 font-mono">{window.location.origin + window.location.pathname}</code> を入力</li>
+                      <li>作成後、表示される「クライアントID」と「クライアントシークレット」をコピーして下の入力欄に貼り付け</li>
                     </ol>
                   </div>
                 </div>
@@ -2988,9 +3031,9 @@ const App = () => {
 
         {/* 設定モーダル */}
         {isSettingsModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <div className="bg-neutral-900 border border-neutral-800 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden">
-              <div className="p-6 border-b border-neutral-800 flex justify-between items-center bg-neutral-800/50">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+            <div className="bg-neutral-900 border border-neutral-800 w-full max-w-md max-h-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col my-auto">
+              <div className="flex-shrink-0 p-6 border-b border-neutral-800 flex justify-between items-center bg-neutral-800/50">
                 <h2 className="text-xl font-black uppercase tracking-tighter">
                   設定
                 </h2>
@@ -3001,7 +3044,7 @@ const App = () => {
                   <X size={24} />
                 </button>
               </div>
-              <div className="p-6 space-y-6">
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {/* プリセットアニメのオン/オフ */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
@@ -3087,6 +3130,62 @@ const App = () => {
                     <p className="text-xs text-neutral-500 mt-2">
                       通知を有効にすると、設定した時刻に未視聴アニメを通知します
                     </p>
+                  )}
+                </div>
+
+                {/* Googleアカウント設定 */}
+                <div className="border-t border-neutral-800 pt-6">
+                  <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                    <User size={18} />
+                    アカウント
+                  </h3>
+                  <p className="text-sm text-neutral-400 mb-4">
+                    ログイン中のアカウント: {user?.displayName || user?.email || 'ユーザー'}
+                  </p>
+                  <button
+                    onClick={handleGoogleLogout}
+                    className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-4 rounded-xl transition-all"
+                  >
+                    Googleからログアウト
+                  </button>
+                </div>
+
+                {/* Annict認証設定 */}
+                <div className="border-t border-neutral-800 pt-6">
+                  <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                    <User size={18} />
+                    Annict認証
+                  </h3>
+                  <p className="text-sm text-neutral-400 mb-4">
+                    Annictと連携すると、視聴予定を自動的に取得できます。個人用アクセストークンでログインしてください。
+                  </p>
+                  {!annictAccessToken ? (
+                    <button
+                      onClick={() => {
+                        setIsSettingsModalOpen(false);
+                        setIsAnnictTokenModalOpen(true);
+                      }}
+                      className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2"
+                    >
+                      <LogIn size={18} />
+                      Annictでログイン
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-green-400 text-sm mb-2">
+                        <CheckCircle size={16} />
+                        <span>Annictと連携済み</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setIsSettingsModalOpen(false);
+                          handleAnnictLogout();
+                        }}
+                        className="w-full bg-neutral-800 hover:bg-neutral-700 text-white font-bold py-3 px-4 rounded-xl transition-all"
+                      >
+                        Annictログアウト
+                      </button>
+                    </div>
                   )}
                 </div>
 

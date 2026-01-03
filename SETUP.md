@@ -19,10 +19,18 @@ npm install
 
 1. Firebase Console の左メニューから「Authentication」を選択
 2. 「始める」をクリック
-3. 「匿名」認証プロバイダを有効化
+3. **Google認証プロバイダを有効化（必須）**
+   - 「サインイン方法」タブを開く（または「Sign-in method」タブ）
+   - 「Google」をクリック
+   - 「有効にする」をオンに
+   - プロジェクトのサポートメールを設定（必要に応じて）
+   - 「保存」をクリック
+4. （オプション）匿名認証プロバイダを有効化
    - 「匿名」をクリック
    - 「有効にする」をオンに
    - 「保存」をクリック
+   
+**重要**: Google認証は必須です。有効化しないとログイン時に `auth/operation-not-allowed` エラーが発生します。
 
 ### 4. Firestore Database の作成
 
@@ -133,6 +141,22 @@ npm run dev
 
 - Firestoreセキュリティルールが正しく設定されているか確認
 - ブラウザの開発者ツールでFirebaseエラーを確認
+
+### Googleログインエラー（auth/operation-not-allowed）
+
+**エラーメッセージ**: `Firebase: Error (auth/operation-not-allowed)`
+
+**原因**: Firebase ConsoleでGoogle認証プロバイダーが有効化されていない
+
+**解決方法**:
+1. [Firebase Console](https://console.firebase.google.com/)にアクセス
+2. プロジェクトを選択
+3. 左メニューから「Authentication」を選択
+4. 「サインイン方法」（または「Sign-in method」）タブを開く
+5. 「Google」をクリック
+6. 「有効にする」をオンにして「保存」をクリック
+
+これでGoogleログインが使用できるようになります。
 
 
 
